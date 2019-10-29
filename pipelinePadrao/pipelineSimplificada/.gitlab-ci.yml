@@ -1,0 +1,144 @@
+#este exemplo considera um projeto que utiliza nodeJS nesse caso o docusaurus (https://docusaurus.io/)
+#além disso estamos utilizando o surge.sh para publicar o site na internet, você precisar criar sua conta e configurar as variáveis de ambiente
+#também usamos o blc
+#e o snyk para teste de vulnerabilidade
+#todos as ferramentas estão explicadas no Readme deste github
+image: node
+
+#definição dos steps usado na pipeline
+stages:
+  - test
+  - package
+  - deploy
+
+#esse step vai validar se não temos links quebrados no site 
+teste site:
+  stage: test
+  before_script:
+    - npm install -g broken-link-checker@0.7.8 wait-on@3.3.0 #instala as libs necessárias
+  script:
+    - cd website
+    - npm install && npm run start &
+    - wait-on http://localhost:3000/ -t 300000 #comando para aguardar site ficar disponívels no endereço local
+    - blc  --recursive --exclude-external http://localhost:3000 #validação de links quebrados
+  tags:
+    - lab
+
+#executa scan de vulnerabilidade no site
+teste vulnerabilidade:
+  stage: test
+  before_script:
+    - npm install -g snyk #instala ferramenta de scan de vulnerabilidade. 
+  script:
+    - cd website
+    - npm install
+    - npm run scan
+  tags:
+    - lab
+
+#gera pacote do site
+package site:
+  stage: package
+  cache:
+    key: chave_unica_cache
+    policy: push #envia cache para o Gitlab
+    paths:
+      - /website/build
+  artifacts:
+    name: "$CI_JOB_NAME-$CI_COMMIT_REF_NAME"
+    when: always
+    expire_in: 30 mins
+    paths:
+      - ./website/build/missaodevops     
+  script:
+    - cd website
+    - npm install
+    - npm run build
+  tags:
+    - lab
+
+deploy to staging:
+  stage: deploy
+  variables:
+    CNAME: $CI_COMMIT_REF_SLUG.testegitlabcibrasilcampinassp.com.br #sempre terá uma URL nova para esse cenário com uso de $CI_COMMIT_REF_SLUG
+  before_script:
+    - npm install -g surge
+  script:
+    - surge --project ./website/build/missaodevops --domain ${CNAME}
+  after_script:
+    - ls -lha #comandos depois de executar o script do step
+  cache:
+    key: chave_unica_cache
+    policy: pull #recebe cache do step package
+  environment:
+    name: $CI_COMMIT_REF_SLUG
+    url: http://{$CNAME}
+  only:
+    - staging #branch para executar, nesse caso, somente na staging
+  tags:
+    - lab #tag do seu runner configurado no Gitlab
+
+deploy to release:
+  stage: deploy
+  variables:
+    CNAME: $CI_COMMIT_REF_SLUG.testegitlabcibrasilcampinassp.com.br #sempre terá uma URL nova para esse cenário com uso de $CI_COMMIT_REF_SLUG
+  before_script:
+    - whoami #comandos antes de executar o script do step
+  script:
+    - surge --project ./website/build/missaodevops --domain ${CNAME}
+  after_script:
+    - ls -lha #comandos depois de executar o script do step
+  cache:
+    key: chave_unica_cache
+    policy: pull #recebe cache do step package
+  environment:
+    name: $CI_COMMIT_REF_SLUG
+    url: http://${CNAME}
+    on_stop: stop_release #usar essa ação para matar ambiente de release
+  only:
+    - release #branch para executar, nesse caso, somente na release
+  tags:
+    - lab #tag do seu runner configurado no Gitlab  
+  
+stop_release:
+  stage: deploy
+  variables:
+    CNAME: $CI_COMMIT_REF_SLUG.testegitlabcibrasilcampinassp.com.br #sempre terá uma URL nova para esse cenário com uso de $CI_COMMIT_REF_SLUG
+    GIT_STRATEGY: none #diz para o gitlab fazer fetch do projeto mas ignora operações do Gitlab, excelente para uso na manipulação de artefatos
+  before_script:
+    - pwd
+  script: 
+    - surge teardown ${CNAME} #retira o site
+  after_script:
+    - whoami
+  when: manual #diz que a operação de stop deve ser realizada manualmente por um humano
+  environment:
+    name: $CI_COMMIT_REF_SLUG #identificador do commit recomendado para uso em URL
+    url: http://${CNAME}
+    action: stop
+  only:
+    - release #branch para executar, nesse caso, somente na release
+  tags:
+    - lab
+
+deploy site:
+  stage: deploy
+  variables:
+    CNAME: producao.testegitlabcibrasilcampinassp.com.br
+  before_script:
+    - whoami #comandos antes de executar o script do step
+  script:
+    - surge --project ./website/build/missaodevops --domain ${CNAME}
+  after_script:
+    - ls -lha #comandos depois de executar o script do step
+  cache:
+    key: chave_unica_cache
+    policy: pull #recebe cache do step package
+  environment:
+    name: deploy-site
+    url: http://${CNAME}
+  only:
+    - merge_request #somente quando for feito merge_request para branch master
+    - master #branch para executar, nesse caso, somente na master
+  tags:
+    - lab #tag do seu runner configurado no Gitlab
